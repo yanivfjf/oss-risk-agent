@@ -38,6 +38,10 @@ The agent expects tarballs (`.tar.gz`) containing a customer directory with:
 - `approved_packages.csv` — packages that passed curation
 - `unmatched_urls.csv` — URLs that couldn't be matched (optional)
 
+## Sample Output
+
+![Report sample showing block/approve rates, ecosystem breakdown, and top blocking policies](assets/report_sample.png)
+
 ## Output
 
 A PDF report covering:
