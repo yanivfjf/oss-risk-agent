@@ -115,12 +115,25 @@ def derive_customer_name(customer_dir: str, summary: dict) -> str:
 def load_data(customer_dir: str) -> dict:
     """Load all CSV files and return a dict of DataFrames."""
     print("  → Loading CSV files …")
+
+    # Some tarballs nest the CSVs under a `results/` subfolder
+    candidate_dirs = [customer_dir, os.path.join(customer_dir, "results")]
+    base = customer_dir
+    for c in candidate_dirs:
+        if os.path.exists(os.path.join(c, "blocked_packages.csv")):
+            base = c
+            break
+
     files = {
-        "blocked":    os.path.join(customer_dir, "blocked_packages.csv"),
-        "blocked_v2": os.path.join(customer_dir, "blocked_packages_v2.csv"),
-        "approved":   os.path.join(customer_dir, "approved_packages.csv"),
-        "unmatched":  os.path.join(customer_dir, "unmatched_urls.csv"),
+        "blocked":    os.path.join(base, "blocked_packages.csv"),
+        "blocked_v2": os.path.join(base, "blocked_packages_v2.csv"),
+        "approved":   os.path.join(base, "approved_packages.csv"),
+        "unmatched":  os.path.join(base, "unmatched_urls.csv"),
     }
+    # Some result directories use 'unmatched.csv' instead of 'unmatched_urls.csv'
+    if not os.path.exists(files["unmatched"]) and os.path.exists(os.path.join(base, "unmatched.csv")):
+        files["unmatched"] = os.path.join(base, "unmatched.csv")
+
     dfs = {}
     for key, path in files.items():
         if os.path.exists(path):
@@ -129,6 +142,18 @@ def load_data(customer_dir: str) -> dict:
         else:
             print(f"     {key}: NOT FOUND — skipping")
             dfs[key] = pd.DataFrame()
+
+    # If the blocked CSV uses the policy-matrix format (one column per policy, no
+    # "Blocking Policies" column), synthesise the unified "Blocking Policies" column.
+    blk = dfs.get("blocked")
+    if blk is not None and not blk.empty and "Blocking Policies" not in blk.columns:
+        policy_cols = [c for c in blk.columns if c.startswith("block_")]
+        if policy_cols:
+            def _row_policies(row):
+                return "|".join(c for c in policy_cols if (str(row[c]).strip() not in ("", "0", "0.0", "nan")))
+            blk["Blocking Policies"] = blk.apply(_row_policies, axis=1)
+            print(f"     (translated {len(policy_cols)} policy-matrix columns → Blocking Policies)")
+
     return dfs
 
 
@@ -136,7 +161,7 @@ def load_data(customer_dir: str) -> dict:
 # ║  STEP 2 — COMPUTE METRICS                                               ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-def compute_metrics(dfs: dict, summary: dict) -> dict:
+def compute_metrics(dfs: dict, summary: dict, customer_dir: str = None, region_label: str = None) -> dict:
     """Derive all numbers needed for the report."""
     print("  → Computing metrics …")
     blocked  = dfs["blocked"]
@@ -189,13 +214,16 @@ def compute_metrics(dfs: dict, summary: dict) -> dict:
     m["cat_crit_cve"]    = count_policy(r"cvss_9to10")
     m["cat_imm14d"]      = count_policy(r"block_immature_packages_14d")
     m["cat_imm30d"]      = count_policy(r"block_immature_packages_30d")
-    m["cat_eol"]         = count_policy(r"eol|end.of.life")
+    # EOL = aged packages (semantic equivalent — package older than policy threshold,
+    # covering both "with newer version" and "without newer version" variants)
+    m["cat_eol"]         = count_policy(r"block_aged_package|eol|end.of.life")
 
     # ── breakdown by reason ─────────────────────────────────────────────
-    m["reason_immature"] = count_policy(r"block_immature_packages")
-    m["reason_aged"]     = count_policy(r"block_aged_package")
-    m["reason_security"] = count_policy(r"block_cvss")
-    m["reason_license"]  = count_policy(r"block_no_license|block_license_")
+    m["reason_malicious"] = count_policy(r"malicious|malware")
+    m["reason_immature"]  = count_policy(r"block_immature_packages")
+    m["reason_aged"]      = count_policy(r"block_aged_package")
+    m["reason_security"]  = count_policy(r"block_cvss")
+    m["reason_license"]   = count_policy(r"block_no_license|block_license_")
 
     # ── ecosystem breakdown ──────────────────────────────────────────────
     eco_col = "Package Type" if "Package Type" in blocked.columns else "package_type"
@@ -256,6 +284,54 @@ def compute_metrics(dfs: dict, summary: dict) -> dict:
             m["imm2d_note"] = ""
     else:
         m["imm2d_note"] = ""
+
+    # ── malicious package list + earliest raw-log timestamp ─────────────
+    m["malicious_packages"] = []
+    if not blocked.empty and "Blocking Policies" in blocked.columns:
+        mal_mask = blocked["Blocking Policies"].str.contains(r"malicious|malware", na=False, regex=True)
+        if mal_mask.any():
+            pkg_col  = "Package Name"    if "Package Name"    in blocked.columns else "package_name"
+            ver_col  = "Package Version" if "Package Version" in blocked.columns else "package_version"
+            eco_col3 = "Package Type"    if "Package Type"    in blocked.columns else "package_type"
+            cnt_col  = "Count"           if "Count"           in blocked.columns else "count"
+            url_col  = "URL"             if "URL"             in blocked.columns else ("url" if "url" in blocked.columns else None)
+            sub = blocked[mal_mask]
+            for _, row in sub.iterrows():
+                m["malicious_packages"].append({
+                    "name":    str(row[pkg_col]),
+                    "version": str(row[ver_col]),
+                    "eco":     str(row[eco_col3]),
+                    "count":   int(row[cnt_col]) if cnt_col in blocked.columns else 0,
+                    "url":     str(row[url_col]) if url_col else "",
+                    "region":  region_label or "",
+                    "timestamp": None,
+                })
+
+            # Try to enrich with earliest timestamp from raw_logs.jsonl
+            if customer_dir:
+                raw_logs_path = os.path.join(customer_dir, "raw_logs.jsonl")
+                if os.path.exists(raw_logs_path):
+                    import json
+                    try:
+                        pkg_ts = {}  # url → earliest timestamp
+                        with open(raw_logs_path) as rf:
+                            for line in rf:
+                                try:
+                                    d = json.loads(line)
+                                except Exception:
+                                    continue
+                                req_path = d.get("request_path", "")
+                                ts       = d.get("@timestamp", "")
+                                for p in m["malicious_packages"]:
+                                    if p["url"] and p["url"] in req_path:
+                                        prev = pkg_ts.get(p["url"])
+                                        if prev is None or ts < prev:
+                                            pkg_ts[p["url"]] = ts
+                        for p in m["malicious_packages"]:
+                            if p["url"] in pkg_ts:
+                                p["timestamp"] = pkg_ts[p["url"]]
+                    except Exception as e:
+                        print(f"     (raw_logs enrichment skipped: {e})")
 
     # ── crit CVE note ────────────────────────────────────────────────────
     crit_pkgs = m["crit_packages"]
@@ -401,24 +477,33 @@ def build_ratio_panel(m: dict) -> Table:
     bar_d.add(String(bw + (bar_inner_w-bw)/2, 5, f"{approved_pct}%", fontSize=7,
                      fillColor=colors.white, textAnchor="middle", fontName="Helvetica-Bold"))
 
-    # Breakdown table — top 4 reasons by count
-    reasons = [
+    # Breakdown table — top reasons by count (Malicious always listed first when present)
+    reasons = []
+    if m.get("reason_malicious", 0) > 0:
+        reasons.append(("Malicious", m["reason_malicious"]))
+    reasons.extend([
         ("Immature",        m["reason_immature"]),
         ("Aged / outdated", m["reason_aged"]),
         ("Security (CVSS)", m["reason_security"]),
         ("License issues",  m["reason_license"]),
-    ]
+    ])
     total_b = m["total_blocked"] or 1
     hdr = [Paragraph("<font size='7' color='#888780'>Blocked reason</font>", plain()),
            Paragraph("<font size='7' color='#888780'>Count</font>", plain()),
            Paragraph("<font size='7' color='#888780'>%</font>", plain())]
     bt_inner_w = pw - 20
-    rows = [hdr] + [
-        [Paragraph(label, plain()),
-         Paragraph(f"<font color='#2C2C2A'>{cnt:,}</font>", plain()),
-         Paragraph(f"<font color='#185FA5'><b>{round(cnt/total_b*100)}%</b></font>", plain())]
-        for label, cnt in reasons
-    ]
+    def _reason_row(label, cnt):
+        is_mal = (label == "Malicious")
+        label_html = (f"<font color='#A32D2D'><b>{label}</b></font>" if is_mal else label)
+        cnt_color  = "#A32D2D" if is_mal else "#2C2C2A"
+        pct_color  = "#A32D2D" if is_mal else "#185FA5"
+        return [
+            Paragraph(label_html, plain()),
+            Paragraph(f"<font color='{cnt_color}'><b>{cnt:,}</b></font>" if is_mal
+                      else f"<font color='{cnt_color}'>{cnt:,}</font>", plain()),
+            Paragraph(f"<font color='{pct_color}'><b>{round(cnt/total_b*100)}%</b></font>", plain()),
+        ]
+    rows = [hdr] + [_reason_row(label, cnt) for label, cnt in reasons]
     bt = Table(rows, colWidths=[bt_inner_w*0.56, bt_inner_w*0.24, bt_inner_w*0.20])
     bt.setStyle(TableStyle([
         ("LEFTPADDING",(0,0),(-1,-1),0),  ("RIGHTPADDING",(0,0),(-1,-1),0),
@@ -637,7 +722,116 @@ def build_pdf(customer_name: str, m: dict, output_path: str, regions: list = Non
     story.append(section_label("Executive Summary"))
     story.append(Spacer(1, 6))
 
+    # ── Critical alert: malicious package detected ───────────────────────
+    mal_pkgs = m.get("malicious_packages", [])
+    if mal_pkgs:
+        # Build a descriptive string listing each malicious package
+        def _fmt_ts(ts):
+            if not ts:
+                return None
+            try:
+                # Example input: 2026-04-17T16:40:07.320Z
+                dt = datetime.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                return dt.strftime("%d %b %Y at %H:%M UTC")
+            except Exception:
+                return ts
+
+        # Group by (name, region) to summarise
+        lines = []
+        for p in mal_pkgs:
+            ts_str = _fmt_ts(p.get("timestamp"))
+            region = p.get("region") or "unknown region"
+            loc = f"<b>{region}</b>"
+            if ts_str:
+                loc += f" on <b>{ts_str}</b>"
+            lines.append(
+                f"<b>{p['name']}@{p['version']}</b> ({p['eco']}) — requested in {loc}"
+            )
+        pkg_list_html = "<br/>".join(f"&nbsp;&nbsp;•&nbsp;&nbsp;{ln}" for ln in lines)
+
+        # Risk explanation — tailored for sweetalert2 specifically, but general-purpose otherwise
+        primary = mal_pkgs[0]
+        name_lower = primary["name"].lower()
+        if "sweetalert2" in name_lower:
+            risk_text = (
+                "<b>sweetalert2</b> is one of the most widely-used JavaScript libraries for modal dialogs "
+                "and user-facing alerts, installed in millions of web applications including banking and "
+                "financial front-ends. A malicious version of such a ubiquitous UI component represents a "
+                "worst-case supply chain scenario: once loaded in a browser, the compromised code runs in "
+                "the same security context as the application itself, giving the attacker the ability to "
+                "<b>exfiltrate session tokens, capture credentials and one-time passwords, inject fraudulent "
+                "transactions, manipulate what customers see on screen, and pivot into internal APIs</b> — "
+                "all through code that every downstream user implicitly trusts. Because sweetalert2 is a "
+                "transitive dependency of thousands of other npm packages, a single infected version can "
+                "cascade across an entire product portfolio within hours of publication."
+            )
+        else:
+            risk_text = (
+                f"A malicious package represents the most severe class of OSS supply chain risk: code "
+                f"deliberately crafted by an adversary to execute on developer workstations, build "
+                f"infrastructure, or end-user systems. Typical objectives include credential theft, "
+                f"data exfiltration, establishing persistence, and pivoting into internal networks. "
+                f"Because <b>{primary['name']}</b> was actively requested by a developer or automated "
+                f"build, the attack chain had already begun."
+            )
+
+        alert_html = (
+            "<font size='11' color='#A32D2D'><b>⚠ Malicious Package Download Detected</b></font>"
+            "<br/><br/>"
+            f"During the reporting window, <b>{len(mal_pkgs)} confirmed malicious package request"
+            f"{'s' if len(mal_pkgs) != 1 else ''}</b> "
+            f"{'were' if len(mal_pkgs) != 1 else 'was'} observed originating from within "
+            f"{customer_name}'s development environment:"
+            "<br/><br/>"
+            f"{pkg_list_html}"
+            "<br/><br/>"
+            f"This is not a theoretical exposure — it is an <b>actual event of a malicious OSS package "
+            f"reaching {customer_name}'s perimeter</b>. In this case the package behaviour was altered to "
+            f"inject undesired audio/video content into UI elements created with the package. This event "
+            f"proves the susceptibility of the software development process in {customer_name} to such attacks. "
+            "<br/><br/>"
+            "<b>This attack could have been prevented by JFrog Curation.</b> With Curation deployed "
+            "inline at the package gateway, this malicious request would have been intercepted before "
+            f"reaching the developer's <code>node_modules</code> or any CI/CD artifact — the policy "
+            "<code>block_malicious_package</code> would have fired automatically on the first download "
+            "attempt, blocking it and alerting the security team without requiring any developer action. "
+            "Instead, without Curation, the package was delivered into the build pipeline and is now part "
+            "of an active incident requiring manual investigation, dependency remediation, and forensic "
+            f"review across every system that consumed it. <b>Curation turns attacks of this class into "
+            "logged, blocked events — before they become breaches.</b>"
+        )
+
+        alert_box = Table(
+            [[Paragraph(alert_html, ParagraphStyle("alert", fontName="Helvetica", fontSize=9,
+                                                    textColor=RED_DARK, leading=14, spaceAfter=0))]],
+            colWidths=[CW]
+        )
+        alert_box.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1), RED_BG),
+            ("ROUNDEDCORNERS",(0,0),(-1,-1),[6,6,6,6]),
+            ("LEFTPADDING",(0,0),(-1,-1),16),  ("RIGHTPADDING",(0,0),(-1,-1),16),
+            ("TOPPADDING",(0,0),(-1,-1),14),   ("BOTTOMPADDING",(0,0),(-1,-1),14),
+            ("BOX",(0,0),(-1,-1),1.2, RED_DARK),
+            ("LINELEFT",(0,0),(0,-1),5, RED_DARK),
+        ]))
+        story.append(alert_box)
+        story.append(Spacer(1, 10))
+
     imm_total = m["cat_imm2d"] + m["cat_imm14d"] + m["cat_imm30d"]
+    mal_count = len(m.get("malicious_packages", []))
+    if mal_count:
+        mal_phrase = (
+            f"<b>{mal_count} confirmed malicious package "
+            f"request{'s' if mal_count != 1 else ''}</b> (detailed in the alert above and in Appendix 0), "
+            f"followed by critical vulnerabilities (CVSS 9–10), license-restricted components, "
+            f"and <b>{imm_total:,} immature package versions</b> that were less than 30 days old at "
+            f"the time of the request"
+        )
+    else:
+        mal_phrase = (
+            f"critical vulnerabilities (CVSS 9–10), license-restricted components, and, most prominently, "
+            f"<b>{imm_total:,} immature package versions</b> that were less than 30 days old at the time of the request"
+        )
     exec_text = (
         f"This report quantifies the current <b>open-source software (OSS) supply chain risk</b> exposure "
         f"within {customer_name}'s software development environment"
@@ -646,8 +840,7 @@ def build_pdf(customer_name: str, m: dict, output_path: str, regions: list = Non
         f"between {m['date_start']} and {m['date_end']}. Across {m['total_log_entries']:,} log entries, "
         f"<b>{m['total_blocked']:,} unique package versions</b> "
         f"were flagged as risky — a <b>{m['blocked_pct']}% block rate</b> against all classified packages — spanning "
-        f"critical vulnerabilities (CVSS 9–10), license-restricted components, and, most prominently, "
-        f"<b>{imm_total:,} immature package versions</b> that were less than 30 days old at the time of the request."
+        f"{mal_phrase}."
         "<br/><br/>"
         "Immature packages represent the most acute and least visible threat in the modern OSS supply chain. "
         "A newly published package version has not yet had the time to accumulate community scrutiny, "
@@ -656,8 +849,15 @@ def build_pdf(customer_name: str, m: dict, output_path: str, regions: list = Non
         "attack observed in the npm ecosystem in which threat actors publish malicious packages designed to "
         "mimic legitimate, widely-used libraries. These packages are engineered to be downloaded "
         "immediately after publication, before detection tools and human reviewers have had a chance to "
-        f"identify them. With <b>{m['cat_imm2d']} packages which were downloaded within 2 days of release</b> and hundreds more within "
-        f"14 days, this report illustrates that {customer_name}'s developers are actively pulling packages "
+        "identify them. "
+        + (
+            f"With <b>{m['cat_imm2d']} packages which were downloaded within 2 days of release</b> and "
+            f"hundreds more within 14 days, "
+            if m.get("cat_imm2d", 0) > 0 else
+            f"With <b>{m['cat_imm14d']:,} packages downloaded within 14 days of release</b> and "
+            f"<b>{m['cat_imm30d']:,} within 30 days</b>, "
+        )
+        + f"this report illustrates that {customer_name}'s developers are actively pulling packages "
         "during exactly this high-risk window — at a scale and frequency that cannot be managed through "
         "manual review alone."
         "<br/><br/>"
@@ -740,6 +940,18 @@ def build_pdf(customer_name: str, m: dict, output_path: str, regions: list = Non
         ("TOPPADDING",(0,0),(-1,-1),0),  ("BOTTOMPADDING",(0,0),(-1,-1),0),
     ]))
     story.append(mid_tbl)
+
+    # Optional footnote — clarifies that maven entries are gradle packages
+    if m.get("_maven_gradle_note"):
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(
+            "<font size='7' color='#888780'><i>"
+            "* Requests that appear under the maven ecosystem are actually gradle packages "
+            "requested from upstream repo: <font color='#185FA5'>https://plugins.gradle.org/m2/</font> "
+            "which is defined as a maven remote repository in Cato Networks' environment."
+            "</i></font>",
+            plain()
+        ))
     story.append(Spacer(1, 12))
 
     # ── Top policies bar chart ───────────────────────────────────────────
@@ -754,6 +966,69 @@ def build_pdf(customer_name: str, m: dict, output_path: str, regions: list = Non
         plain()
     ))
 
+    # ── Appendix 0: Malicious packages ───────────────────────────────────
+    mal_pkgs_app = m.get("malicious_packages", [])
+    if mal_pkgs_app:
+        story.append(PageBreak())
+        story.append(appendix_header("Appendix 0", "Malicious Packages"))
+        story.append(Spacer(1, 4))
+
+        # Build descriptive intro with region and timestamp info
+        def _fmt_ts_app(ts):
+            if not ts:
+                return None
+            try:
+                dt = datetime.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                return dt.strftime("%d %b %Y at %H:%M UTC")
+            except Exception:
+                return ts
+
+        detail_lines = []
+        for p in mal_pkgs_app:
+            ts_str = _fmt_ts_app(p.get("timestamp"))
+            region = p.get("region") or "unknown region"
+            bits = [
+                f"<b>{p['name']}@{p['version']}</b> ({p['eco']})",
+                f"region: <b>{region}</b>",
+            ]
+            if ts_str:
+                bits.append(f"first requested: <b>{ts_str}</b>")
+            if p.get("count"):
+                bits.append(f"attempts: <b>{p['count']}</b>")
+            if p.get("url"):
+                bits.append(f"source: <font size='7'>{p['url']}</font>")
+            detail_lines.append(" &nbsp;·&nbsp; ".join(bits))
+
+        intro0 = (
+            f"The {len(mal_pkgs_app)} package request"
+            f"{'s' if len(mal_pkgs_app) != 1 else ''} below "
+            f"{'were' if len(mal_pkgs_app) != 1 else 'was'} flagged by the "
+            f"<code>block_malicious_package</code> policy — the most severe classification in the "
+            f"curation policy set. Each entry represents a confirmed attempt to pull a package that the "
+            f"upstream public registry was knowingly serving as malicious at the time of request, "
+            f"constituting a successful supply chain attack against {customer_name}'s development "
+            f"environment. Had JFrog Curation been enforcing policy inline at the gateway, every one of "
+            f"these requests would have been blocked automatically before reaching the requesting "
+            f"workstation, CI runner, or artifact repository."
+        )
+        story.append(Paragraph(intro0, body_style()))
+        story.append(Spacer(1, 8))
+
+        # Per-incident detail block
+        for ln in detail_lines:
+            story.append(Paragraph(f"&nbsp;&nbsp;•&nbsp;&nbsp;{ln}", body_style()))
+            story.append(Spacer(1, 3))
+        story.append(Spacer(1, 8))
+
+        # Standard package table (same structure as Appendices 1 & 2)
+        story.append(build_pkg_table(mal_pkgs_app))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(
+            f"<font size='7' color='#888780'>"
+            f"Policy: block_malicious_package · Period: {date_range}</font>",
+            plain()
+        ))
+
     # ── Appendix 1: Immature < 2d ────────────────────────────────────────
     story.append(PageBreak())
     story.append(appendix_header("Appendix 1", "Immature packages — downloaded within 2 days of release"))
@@ -762,6 +1037,9 @@ def build_pdf(customer_name: str, m: dict, output_path: str, regions: list = Non
         f"The {len(m['imm2d_packages'])} packages below were flagged because they were fetched "
         f"within 2 days of their public release. "
         + (m["imm2d_note"] if m["imm2d_note"] else "")
+        + f" We identified immature version downloads of packages previously compromised by the "
+          f"<b>Shai-Hulud</b> attack — such as <b>eslint</b> and <b>duckdb</b> — highlighting the "
+          f"likelihood of similar attacks targeting {customer_name} in the future."
     )
     story.append(Paragraph(intro, body_style()))
     story.append(Spacer(1, 10))
@@ -869,10 +1147,11 @@ def aggregate_metrics(all_metrics: list) -> dict:
     agg["cat_imm30d"]     = _sum("cat_imm30d")
     agg["cat_eol"]        = _sum("cat_eol")
 
-    agg["reason_immature"] = _sum("reason_immature")
-    agg["reason_aged"]     = _sum("reason_aged")
-    agg["reason_security"] = _sum("reason_security")
-    agg["reason_license"]  = _sum("reason_license")
+    agg["reason_malicious"] = _sum("reason_malicious")
+    agg["reason_immature"]  = _sum("reason_immature")
+    agg["reason_aged"]      = _sum("reason_aged")
+    agg["reason_security"]  = _sum("reason_security")
+    agg["reason_license"]   = _sum("reason_license")
 
     agg["ecosystem_counts"] = _eco_merge()
     agg["policy_counts"]    = _policy_merge()
@@ -880,10 +1159,23 @@ def aggregate_metrics(all_metrics: list) -> dict:
     # Date range — use earliest start and latest end
     agg["date_start"]    = _earliest("date_start")
     agg["date_end"]      = _latest("date_end")
-    agg["duration_days"] = max((m.get("duration_days", 0) for m in all_metrics), default="?")
+    # Coerce to int, ignoring missing or non-numeric values (e.g. "?")
+    _durations = []
+    for _m in all_metrics:
+        try:
+            _durations.append(int(_m.get("duration_days", 0)))
+        except (ValueError, TypeError):
+            continue
+    agg["duration_days"] = max(_durations) if _durations else "?"
 
     agg["imm2d_packages"] = _merge_pkg_list("imm2d_packages")
     agg["crit_packages"]  = _merge_pkg_list("crit_packages")
+
+    # Malicious packages — preserve region info, do not dedupe across regions
+    agg["malicious_packages"] = []
+    for m in all_metrics:
+        for p in m.get("malicious_packages", []):
+            agg["malicious_packages"].append(dict(p))
 
     # Regenerate notes for aggregated lists
     imm2_pkgs = agg["imm2d_packages"]
@@ -1082,6 +1374,18 @@ def main():
                         help="Output PDF path")
     parser.add_argument("--customer-name", "-n", default=None,
                         help="Override customer display name (useful for multi-tarball aggregation)")
+    parser.add_argument("--date-start", default=None,
+                        help="Override analysis window start date shown in report header (e.g. '13 Apr 2026')")
+    parser.add_argument("--date-end", default=None,
+                        help="Override analysis window end date shown in report header (e.g. '17 Apr 2026')")
+    parser.add_argument("--duration-days", default=None, type=int,
+                        help="Override duration in days shown in the report header")
+    parser.add_argument("--maven-gradle-note", action="store_true",
+                        help="Add a footnote under the ecosystem chart explaining that maven entries are gradle packages from plugins.gradle.org")
+    parser.add_argument("--slides", action="store_true",
+                        help="Also generate an executive .pptx slide deck alongside the PDF")
+    parser.add_argument("--slides-output", default=None,
+                        help="Path for the .pptx slide deck (defaults to PDF path with .pptx extension)")
     args = parser.parse_args()
 
     for t in args.tarballs:
@@ -1099,6 +1403,29 @@ def main():
     all_metrics   = []
     region_names  = []
     region_data   = []   # list of (region_label, metrics)
+    compromise_blocked  = []   # accumulated for slide deck threat-intel scan
+    compromise_approved = []
+
+    def _capture_records(df, ecosystem_default=None):
+        """Yield {name, version, eco, count, region} dicts from a CSV-derived DF."""
+        if df is None or df.empty:
+            return []
+        name_col = "Package Name"    if "Package Name"    in df.columns else "package_name"
+        ver_col  = "Package Version" if "Package Version" in df.columns else "package_version"
+        eco_col  = "Package Type"    if "Package Type"    in df.columns else "package_type"
+        cnt_col  = "Count"           if "Count"           in df.columns else "count"
+        out = []
+        for _, row in df.iterrows():
+            try:
+                out.append({
+                    "name":    str(row[name_col]),
+                    "version": str(row[ver_col])     if ver_col in df.columns else "",
+                    "eco":     str(row[eco_col]).lower() if eco_col in df.columns else (ecosystem_default or ""),
+                    "count":   int(row[cnt_col])     if cnt_col in df.columns else 0,
+                })
+            except Exception:
+                continue
+        return out
 
     with tempfile.TemporaryDirectory() as work_dir:
         for idx, tarball_path in enumerate(args.tarballs):
@@ -1111,9 +1438,38 @@ def main():
             region_label  = derive_customer_name(customer_dir, summary)
             print(f"  Region label: {region_label}")
             dfs     = load_data(customer_dir)
-            metrics = compute_metrics(dfs, summary)
+            metrics = compute_metrics(dfs, summary, customer_dir=customer_dir, region_label=region_label)
             all_metrics.append(metrics)
             region_data.append((region_label, metrics))
+
+            # Capture raw records for the compromise-scan slide
+            for rec in _capture_records(dfs.get("blocked")):
+                rec["region"] = region_label
+                compromise_blocked.append(rec)
+            for rec in _capture_records(dfs.get("approved")):
+                rec["region"] = region_label
+                compromise_approved.append(rec)
+
+        # Consolidate same-region tarballs — merge entries whose region_label matches
+        consolidated = {}        # region_label → list of metrics
+        order = []               # preserve first-seen order
+        for label, mx in region_data:
+            key = label.lower().strip()
+            if key not in consolidated:
+                consolidated[key] = {"label": label, "metrics": []}
+                order.append(key)
+            consolidated[key]["metrics"].append(mx)
+
+        merged_region_data = []
+        for key in order:
+            label  = consolidated[key]["label"]
+            mlist  = consolidated[key]["metrics"]
+            if len(mlist) == 1:
+                merged_region_data.append((label, mlist[0]))
+            else:
+                print(f"  → Merging {len(mlist)} tarballs for region '{label}'")
+                merged_region_data.append((label, aggregate_metrics(mlist)))
+        region_data = merged_region_data
 
         # Customer name resolution
         if args.customer_name:
@@ -1138,6 +1494,15 @@ def main():
         # Aggregate
         final_metrics = aggregate_metrics(all_metrics) if multi else all_metrics[0]
 
+        # Optional CLI overrides for header date range
+        if args.date_start:
+            final_metrics["date_start"] = args.date_start
+        if args.date_end:
+            final_metrics["date_end"]   = args.date_end
+        if args.duration_days is not None:
+            final_metrics["duration_days"] = args.duration_days
+        final_metrics["_maven_gradle_note"] = args.maven_gradle_note
+
         # Output path
         if args.output:
             output_path = args.output
@@ -1156,7 +1521,31 @@ def main():
             regions=region_data if multi else None
         )
 
-    print(f"\n  ✓ Done. Report saved to:\n    {output_path}\n")
+        # Optional: build executive slide deck
+        slides_path = None
+        if args.slides:
+            try:
+                from oss_risk_slides import build_slide_deck
+            except ImportError as e:
+                print(f"  ⚠  Could not import slide-deck module: {e}")
+                print(f"     Install with: pip install python-pptx")
+                build_slide_deck = None
+            if build_slide_deck:
+                if args.slides_output:
+                    slides_path = args.slides_output
+                else:
+                    slides_path = re.sub(r"\.pdf$", "", output_path) + ".pptx"
+                build_slide_deck(
+                    customer_name, final_metrics, slides_path,
+                    regions=region_data if multi else None,
+                    compromise_blocked=compromise_blocked,
+                    compromise_approved=compromise_approved,
+                )
+
+    print(f"\n  ✓ Done. Report saved to:\n    {output_path}")
+    if slides_path:
+        print(f"             Slide deck:\n    {slides_path}")
+    print()
 
 
 if __name__ == "__main__":

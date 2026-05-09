@@ -22,6 +22,26 @@ python3 oss_risk_agent.py EU.tar.gz LATAM.tar.gz MEXUS.tar.gz \
 |------|-------|-------------|
 | `--output` | `-o` | Output PDF path |
 | `--customer-name` | `-n` | Override the customer display name |
+| `--date-start` | | Override the analysis-window start date shown in the header |
+| `--date-end` | | Override the analysis-window end date shown in the header |
+| `--duration-days` | | Override the duration (in days) shown in the header |
+| `--maven-gradle-note` | | Add a footnote clarifying that maven entries are gradle packages from `plugins.gradle.org` |
+| `--slides` | | Also generate an executive `.pptx` slide deck alongside the PDF |
+| `--slides-output` | | Path for the slide deck (defaults to PDF path with `.pptx` extension) |
+
+## Executive slide deck
+
+Pass `--slides` to additionally generate a 16:9 PowerPoint deck targeted at executive readers. The deck mirrors the PDF's information architecture and includes:
+
+1. Title slide with customer name and headline KPIs
+2. Executive summary
+3. **Malicious package detected** alert (when applicable)
+4. Risk by category (6-tier card layout)
+5. Block/approve outcome + ecosystem breakdown
+6. Top blocking policies
+7. **Compromised package families** — packages observed in the customer's environment that match a built-in registry of known supply-chain attack victims (Shai-Hulud, Qix/debug-chalk, Marak/colors, axios CVE chain, LiteLLM CVEs, etc.)
+8. Regional comparison (multi-region only)
+9. Recommendation / JFrog Curation positioning
 
 ## Installation
 
