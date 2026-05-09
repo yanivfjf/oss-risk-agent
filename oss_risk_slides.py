@@ -159,11 +159,36 @@ def _no_line(shape):
     shape.line.fill.background()
 
 
+def _i(v):
+    """Coerce any EMU-ish value (int / float / Emu) to integer EMU.
+
+    PowerPoint rejects fractional EMU values in coordinate attributes
+    (cx, cy, x, y) — Keynote silently accepts them. Always round to int
+    before passing geometry into python-pptx.
+    """
+    return int(round(float(v)))
+
+
+def _add_shape(shapes, kind, x, y, w, h):
+    """Coercing wrapper around shapes.add_shape() — rounds to int EMU."""
+    return shapes.add_shape(kind, _i(x), _i(y), _i(w), _i(h))
+
+
+def _add_connector(shapes, kind, x1, y1, x2, y2):
+    """Coercing wrapper around shapes.add_connector() — rounds to int EMU."""
+    return shapes.add_connector(kind, _i(x1), _i(y1), _i(x2), _i(y2))
+
+def _add_textbox_raw(shapes, x, y, w, h):
+    """Coercing wrapper around shapes.add_textbox() — int EMU only."""
+    return shapes.add_textbox(_i(x), _i(y), _i(w), _i(h))
+
+
+
 def _add_textbox(slide, x, y, w, h, text, *,
                  size=14, bold=False, italic=False,
                  color=BODY_FG, align=PP_ALIGN.LEFT,
                  font="Helvetica", anchor=MSO_ANCHOR.TOP):
-    tb = slide.shapes.add_textbox(x, y, w, h)
+    tb = slide.shapes.add_textbox(_i(x), _i(y), _i(w), _i(h))
     tf = tb.text_frame
     tf.word_wrap = True
     tf.margin_left = tf.margin_right = Inches(0.05)
@@ -183,7 +208,7 @@ def _add_textbox(slide, x, y, w, h, text, *,
 
 def _add_navy_background(slide):
     """Fill the entire slide with the dark navy background."""
-    bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
+    bg = _add_shape(slide.shapes, MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
     _set_fill(bg, NAVY)
     _no_line(bg)
     return bg
@@ -191,7 +216,7 @@ def _add_navy_background(slide):
 
 def _add_jfrog_wordmark(slide):
     """Bottom-right JFrog wordmark used on every content slide."""
-    tb = slide.shapes.add_textbox(SLIDE_W - Inches(1.4), SLIDE_H - Inches(0.55),
+    tb = _add_textbox_raw(slide.shapes, SLIDE_W - Inches(1.4), SLIDE_H - Inches(0.55),
                                   Inches(1.0), Inches(0.4))
     tf = tb.text_frame
     tf.margin_left = tf.margin_right = 0
@@ -208,7 +233,7 @@ def _add_jfrog_wordmark(slide):
 
 def _add_title(slide, green_title, red_subtitle=None):
     """Standard slide title — green main + optional red dash subtitle."""
-    tb = slide.shapes.add_textbox(MARGIN_X, TITLE_Y, BODY_W, Inches(0.85))
+    tb = _add_textbox_raw(slide.shapes, MARGIN_X, TITLE_Y, BODY_W, Inches(0.85))
     tf = tb.text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
@@ -283,7 +308,7 @@ def _bullet_frame(slide, x=None, y=None, w=None, h=None):
         w = BODY_W
     if h is None:
         h = SLIDE_H - y - Inches(0.7)
-    tb = slide.shapes.add_textbox(x, y, w, h)
+    tb = _add_textbox_raw(slide.shapes, x, y, w, h)
     tf = tb.text_frame
     tf.word_wrap = True
     tf.margin_left = tf.margin_right = Inches(0.05)
@@ -308,7 +333,7 @@ def _slide_title(prs, customer_name, m, regions):
     _add_navy_background(s)
 
     # JFrog wordmark (top, larger)
-    tb = s.shapes.add_textbox(Inches(2.5), Inches(0.85),
+    tb = _add_textbox_raw(s.shapes, Inches(2.5), Inches(0.85),
                               Inches(3.5), Inches(1.0))
     tf = tb.text_frame
     p = tf.paragraphs[0]
@@ -321,7 +346,7 @@ def _slide_title(prs, customer_name, m, regions):
     r.font.color.rgb = JFROG_GREEN
 
     # Customer wordmark (right of JFrog)
-    tb2 = s.shapes.add_textbox(Inches(7.2), Inches(0.85),
+    tb2 = _add_textbox_raw(s.shapes, Inches(7.2), Inches(0.85),
                                Inches(4.0), Inches(1.0))
     tf2 = tb2.text_frame
     p2 = tf2.paragraphs[0]
@@ -334,7 +359,7 @@ def _slide_title(prs, customer_name, m, regions):
     r2.font.color.rgb = WHITE
 
     # Big green title
-    tb3 = s.shapes.add_textbox(Inches(0.5), Inches(2.8),
+    tb3 = _add_textbox_raw(s.shapes, Inches(0.5), Inches(2.8),
                                SLIDE_W - Inches(1.0), Inches(1.0))
     tf3 = tb3.text_frame
     p3 = tf3.paragraphs[0]
@@ -347,7 +372,7 @@ def _slide_title(prs, customer_name, m, regions):
     r3.font.color.rgb = JFROG_GREEN
 
     # White subtitle
-    tb4 = s.shapes.add_textbox(Inches(0.5), Inches(3.7),
+    tb4 = _add_textbox_raw(s.shapes, Inches(0.5), Inches(3.7),
                                SLIDE_W - Inches(1.0), Inches(0.8))
     tf4 = tb4.text_frame
     p4 = tf4.paragraphs[0]
@@ -360,7 +385,7 @@ def _slide_title(prs, customer_name, m, regions):
 
     # Date
     date_str = datetime.date.today().strftime("%-d %B %Y")
-    tb5 = s.shapes.add_textbox(Inches(0.5), Inches(4.6),
+    tb5 = _add_textbox_raw(s.shapes, Inches(0.5), Inches(4.6),
                                SLIDE_W - Inches(1.0), Inches(0.5))
     tf5 = tb5.text_frame
     p5 = tf5.paragraphs[0]
@@ -621,7 +646,7 @@ def _slide_popular_targeted(prs, customer_name, m):
     for label, x, w in cols:
         _add_textbox(s, x, hdr_y, w, Inches(0.3), label,
                      size=11, bold=True, color=MUTED)
-    line = s.shapes.add_connector(1, MARGIN_X, hdr_y + Inches(0.32),
+    line = _add_connector(s.shapes, 1, MARGIN_X, hdr_y + Inches(0.32),
                                   SLIDE_W - MARGIN_X, hdr_y + Inches(0.32))
     line.line.color.rgb = MUTED
     line.line.width = Pt(0.5)
@@ -634,7 +659,7 @@ def _slide_popular_targeted(prs, customer_name, m):
         sev = items[0][1]["severity"]
         sev_color = RED if sev == "critical" else (AMBER if sev == "high" else MUTED)
         # severity dot
-        dot = s.shapes.add_shape(MSO_SHAPE.OVAL,
+        dot = _add_shape(s.shapes, MSO_SHAPE.OVAL,
                                   Inches(0.55), y + Inches(0.13),
                                   Inches(0.13), Inches(0.13))
         _set_fill(dot, sev_color); _no_line(dot)
@@ -646,7 +671,7 @@ def _slide_popular_targeted(prs, customer_name, m):
         if len(items) > 8:
             names += f", +{len(items) - 8} more"
         # monospace list of packages
-        tb = s.shapes.add_textbox(Inches(5.0), y, Inches(5.4), row_h)
+        tb = _add_textbox_raw(s.shapes, Inches(5.0), y, Inches(5.4), row_h)
         tf = tb.text_frame
         tf.word_wrap = True
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -667,7 +692,7 @@ def _slide_popular_targeted(prs, customer_name, m):
                      f"{approved_total:,}", size=12, bold=True, color=approved_color,
                      anchor=MSO_ANCHOR.MIDDLE)
 
-        rule = s.shapes.add_connector(1,
+        rule = _add_connector(s.shapes, 1,
             MARGIN_X, y + row_h,
             SLIDE_W - MARGIN_X, y + row_h)
         rule.line.color.rgb = RGBColor(0x2A, 0x3A, 0x55)
@@ -687,7 +712,8 @@ def _slide_popular_targeted(prs, customer_name, m):
 # ║  CHART HELPERS — for the Summary slide                                  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 def _add_rect(slide, x, y, w, h, fill=PANEL_BG, line=None, corner=0.06):
-    s = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, w, h)
+    s = _add_shape(slide.shapes, MSO_SHAPE.ROUNDED_RECTANGLE,
+                                _i(x), _i(y), _i(w), _i(h))
     s.adjustments[0] = corner
     _set_fill(s, fill)
     if line is None:
@@ -767,9 +793,9 @@ def _render_blocked_vs_approved(slide, m, x, y, w, h):
     bar_w = w - pad * 2
     bar_h = Inches(0.22)
     blocked_w = Emu(int(int(bar_w) * (blocked_pct / 100.0)))
-    blk = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, bar_x, bar_y, blocked_w, bar_h)
+    blk = _add_shape(slide.shapes, MSO_SHAPE.RECTANGLE, bar_x, bar_y, blocked_w, bar_h)
     _set_fill(blk, RED); _no_line(blk)
-    apr = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+    apr = _add_shape(slide.shapes, MSO_SHAPE.RECTANGLE,
                                   bar_x + blocked_w, bar_y,
                                   bar_w - blocked_w, bar_h)
     _set_fill(apr, GREEN_PCT); _no_line(apr)
@@ -806,7 +832,7 @@ def _render_blocked_vs_approved(slide, m, x, y, w, h):
                  "Count", size=7, color=GRAY_DK)
     _add_textbox(slide, col_x_pct,   tbl_y, Inches(0.6),  row_h,
                  "%", size=7, color=GRAY_DK)
-    rule = slide.shapes.add_connector(1,
+    rule = _add_connector(slide.shapes, 1,
         x + pad, tbl_y + row_h - Inches(0.02),
         x + w - pad, tbl_y + row_h - Inches(0.02))
     rule.line.color.rgb = RULE_GRAY
@@ -862,7 +888,7 @@ def _render_ecosystem(slide, m, x, y, w, h):
                  "Blocked", size=7, color=GRAY_DK)
     _add_textbox(slide, col_pct_x,   hdr_y, col_pct_w,   Inches(0.25),
                  "Share", size=7, color=GRAY_DK)
-    rule = slide.shapes.add_connector(1,
+    rule = _add_connector(slide.shapes, 1,
         x + pad, hdr_y + Inches(0.27),
         x + w - pad, hdr_y + Inches(0.27))
     rule.line.color.rgb = RULE_GRAY
@@ -898,7 +924,7 @@ def _render_ecosystem(slide, m, x, y, w, h):
         bar_h = Emu(int(int(row_h) * 0.45))
         bar_y_mid = rr_y + Emu(int((int(row_h) - int(bar_h)) / 2))
         if int(bw) > 0:
-            bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+            bar = _add_shape(slide.shapes, MSO_SHAPE.RECTANGLE,
                                           col_bar_x, bar_y_mid, bw, bar_h)
             _set_fill(bar, clr); _no_line(bar)
         # Count
