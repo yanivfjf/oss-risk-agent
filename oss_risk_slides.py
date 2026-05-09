@@ -33,12 +33,26 @@ NAVY_DK     = RGBColor(0x09, 0x18, 0x30)
 JFROG_GREEN = RGBColor(0x40, 0xBE, 0x46)   # title accent
 RED         = RGBColor(0xE2, 0x4B, 0x4A)   # "- Section" subtitle
 RED_DK      = RGBColor(0xA3, 0x2D, 0x2D)
+RED_BG      = RGBColor(0xFC, 0xEB, 0xEB)
 WHITE       = RGBColor(0xFF, 0xFF, 0xFF)
+PANEL_BG    = RGBColor(0xF8, 0xF7, 0xF4)   # cream chart-panel background
 BODY_FG     = RGBColor(0xE6, 0xEA, 0xF0)   # off-white body
 MUTED       = RGBColor(0xA9, 0xB3, 0xC2)
 LINK_BLUE   = RGBColor(0x6F, 0xC1, 0xFF)
-AMBER       = RGBColor(0xF2, 0xA9, 0x4B)
+AMBER       = RGBColor(0xBA, 0x75, 0x17)
+AMBER_BG    = RGBColor(0xFA, 0xEE, 0xDA)
+GREEN_PCT   = RGBColor(0x1D, 0x9E, 0x75)
+BLUE_DK     = RGBColor(0x18, 0x5F, 0xA5)
+BLUE_BG     = RGBColor(0xE6, 0xF1, 0xFB)
+PURPLE      = RGBColor(0x53, 0x4A, 0xB7)
+ORANGE      = RGBColor(0xD8, 0x5A, 0x30)
+NPM_BLUE    = RGBColor(0x37, 0x8A, 0xDD)
+PYPI_GREEN  = RGBColor(0x63, 0x99, 0x22)
 GRAY        = RGBColor(0x88, 0x87, 0x80)
+GRAY_BG     = RGBColor(0xF1, 0xEF, 0xE8)
+GRAY_DK     = RGBColor(0x5F, 0x5E, 0x5A)
+NEAR_BLK    = RGBColor(0x2C, 0x2C, 0x2A)
+RULE_GRAY   = RGBColor(0xD3, 0xD1, 0xC7)
 
 
 # ─── Compromised package registry ────────────────────────────────────────
@@ -670,34 +684,297 @@ def _slide_popular_targeted(prs, customer_name, m):
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  CHART HELPERS — for the Summary slide                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+def _add_rect(slide, x, y, w, h, fill=PANEL_BG, line=None, corner=0.06):
+    s = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, w, h)
+    s.adjustments[0] = corner
+    _set_fill(s, fill)
+    if line is None:
+        _no_line(s)
+    else:
+        s.line.color.rgb = line
+        s.line.width = Pt(0.5)
+    s.shadow.inherit = False
+    return s
+
+
+def _section_label(slide, x, y, w, text):
+    """Tiny grey ALL-CAPS section label (e.g., 'BLOCKED VS APPROVED')."""
+    _add_textbox(slide, x, y, w, Inches(0.25),
+                 text.upper(), size=8, bold=True, color=MUTED, font="Helvetica")
+
+
+def _render_priority_cards(slide, m, x, y, w, h):
+    """Six risk-tier cards in a row, mirroring PDF page 2."""
+    cats = [
+        ("#1", m.get("cat_malicious", 0), "Malicious packages",       RED_BG,    RED_DK),
+        ("#2", m.get("cat_imm2d", 0),     "Immature < 2 days",        AMBER_BG,  AMBER),
+        ("#3", m.get("cat_crit_cve", 0),  "Critical CVE\n(CVSS 9–10)", RED_BG,   RED_DK),
+        ("#4", m.get("cat_imm14d", 0),    "Immature < 14 days",       AMBER_BG,  AMBER),
+        ("#5", m.get("cat_imm30d", 0),    "Immature < 30 days",       BLUE_BG,   BLUE_DK),
+        ("#6", m.get("cat_eol", 0),       "End of life packages",     GRAY_BG,   GRAY_DK),
+    ]
+    n = len(cats)
+    spacing = Inches(0.04)
+    card_w = (w - spacing * (n - 1)) / n
+    for i, (rank, val, lbl, bg, fg) in enumerate(cats):
+        cx = x + (card_w + spacing) * i
+        _add_rect(slide, cx, y, card_w, h, fill=bg)
+        # Rank superscript-style
+        _add_textbox(slide, cx, y + Inches(0.05), card_w, Inches(0.20),
+                     rank, size=7, bold=True, color=GRAY_DK,
+                     align=PP_ALIGN.CENTER)
+        # Big number
+        _add_textbox(slide, cx, y + Inches(0.22), card_w, Inches(0.55),
+                     f"{val:,}", size=20, bold=True, color=fg,
+                     align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+        # Label (multi-line aware)
+        _add_textbox(slide, cx, y + h - Inches(0.50),
+                     card_w, Inches(0.45),
+                     lbl.replace("\n", " "), size=7.5, color=fg,
+                     bold=True, align=PP_ALIGN.CENTER)
+
+
+def _render_blocked_vs_approved(slide, m, x, y, w, h):
+    """Big % numbers + stacked bar + per-reason breakdown table."""
+    _add_rect(slide, x, y, w, h, fill=PANEL_BG)
+
+    pad = Inches(0.18)
+    blocked_pct  = m.get("blocked_pct", 0)
+    approved_pct = m.get("approved_pct", 0)
+
+    # Big % numbers
+    half = (w - pad * 3) / 2
+    _add_textbox(slide, x + pad,             y + pad,
+                 half, Inches(0.55),
+                 f"{blocked_pct}%", size=28, bold=True, color=RED)
+    _add_textbox(slide, x + pad,             y + pad + Inches(0.50),
+                 half, Inches(0.30),
+                 f"blocked  ({m.get('total_blocked', 0):,})",
+                 size=8, color=GRAY_DK)
+    _add_textbox(slide, x + pad * 2 + half,  y + pad,
+                 half, Inches(0.55),
+                 f"{approved_pct}%", size=28, bold=True, color=GREEN_PCT)
+    _add_textbox(slide, x + pad * 2 + half,  y + pad + Inches(0.50),
+                 half, Inches(0.30),
+                 f"approved  ({m.get('total_approved', 0):,})",
+                 size=8, color=GRAY_DK)
+
+    # Stacked bar
+    bar_x = x + pad
+    bar_y = y + Inches(1.05)
+    bar_w = w - pad * 2
+    bar_h = Inches(0.22)
+    blocked_w = Emu(int(int(bar_w) * (blocked_pct / 100.0)))
+    blk = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, bar_x, bar_y, blocked_w, bar_h)
+    _set_fill(blk, RED); _no_line(blk)
+    apr = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                  bar_x + blocked_w, bar_y,
+                                  bar_w - blocked_w, bar_h)
+    _set_fill(apr, GREEN_PCT); _no_line(apr)
+    _add_textbox(slide, bar_x, bar_y, blocked_w, bar_h,
+                 f"{blocked_pct}%", size=8, bold=True, color=WHITE,
+                 align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+    _add_textbox(slide, bar_x + blocked_w, bar_y, bar_w - blocked_w, bar_h,
+                 f"{approved_pct}%", size=8, bold=True, color=WHITE,
+                 align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+
+    # Breakdown table
+    total_b = m.get("total_blocked", 0) or 1
+    reasons = []
+    if m.get("reason_malicious", 0) > 0:
+        reasons.append(("Malicious",       m["reason_malicious"], True))
+    reasons.extend([
+        ("Immature",       m.get("reason_immature", 0), False),
+        ("Aged / outdated", m.get("reason_aged", 0),     False),
+        ("Security (CVSS)", m.get("reason_security", 0), False),
+        ("License issues",  m.get("reason_license", 0),  False),
+    ])
+
+    tbl_y = bar_y + bar_h + Inches(0.18)
+    # column geometry within the panel
+    col_x_label = x + pad
+    col_x_count = x + pad + Inches(1.65)
+    col_x_pct   = x + pad + Inches(2.55)
+    row_h = Inches(0.26)
+
+    # Header
+    _add_textbox(slide, col_x_label, tbl_y, Inches(1.65), row_h,
+                 "Blocked reason", size=7, color=GRAY_DK)
+    _add_textbox(slide, col_x_count, tbl_y, Inches(0.85), row_h,
+                 "Count", size=7, color=GRAY_DK)
+    _add_textbox(slide, col_x_pct,   tbl_y, Inches(0.6),  row_h,
+                 "%", size=7, color=GRAY_DK)
+    rule = slide.shapes.add_connector(1,
+        x + pad, tbl_y + row_h - Inches(0.02),
+        x + w - pad, tbl_y + row_h - Inches(0.02))
+    rule.line.color.rgb = RULE_GRAY
+    rule.line.width = Pt(0.4)
+
+    rr_y = tbl_y + row_h + Inches(0.03)
+    for label, count, is_mal in reasons:
+        if rr_y + row_h > y + h - Inches(0.05):
+            break
+        label_color = RED_DK if is_mal else NEAR_BLK
+        count_color = RED_DK if is_mal else NEAR_BLK
+        pct_color   = RED_DK if is_mal else BLUE_DK
+        _add_textbox(slide, col_x_label, rr_y, Inches(1.65), row_h,
+                     label, size=9, bold=is_mal, color=label_color,
+                     anchor=MSO_ANCHOR.MIDDLE)
+        _add_textbox(slide, col_x_count, rr_y, Inches(0.85), row_h,
+                     f"{count:,}", size=9, bold=is_mal, color=count_color,
+                     anchor=MSO_ANCHOR.MIDDLE)
+        pct = round(count / total_b * 100) if total_b else 0
+        _add_textbox(slide, col_x_pct, rr_y, Inches(0.6), row_h,
+                     f"{pct}%", size=9, bold=True, color=pct_color,
+                     anchor=MSO_ANCHOR.MIDDLE)
+        rr_y += row_h
+
+
+def _render_ecosystem(slide, m, x, y, w, h):
+    """Horizontal mini-bars per ecosystem with count + %."""
+    _add_rect(slide, x, y, w, h, fill=PANEL_BG)
+
+    pad = Inches(0.18)
+    eco_counts = m.get("ecosystem_counts")
+    if eco_counts is None or len(eco_counts) == 0:
+        _add_textbox(slide, x + pad, y + pad, w - pad * 2, h - pad * 2,
+                     "No ecosystem data available.",
+                     size=10, italic=True, color=GRAY_DK,
+                     align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+        return
+
+    # Header row
+    hdr_y = y + pad
+    col_eco_x   = x + pad
+    col_eco_w   = Inches(0.75)
+    col_bar_x   = x + pad + Inches(0.85)
+    col_bar_w   = w - col_bar_x + x - Inches(1.0) - Inches(0.05)
+    col_count_x = x + w - pad - Inches(0.95)
+    col_count_w = Inches(0.55)
+    col_pct_x   = x + w - pad - Inches(0.4)
+    col_pct_w   = Inches(0.4)
+
+    _add_textbox(slide, col_eco_x,   hdr_y, col_eco_w,   Inches(0.25),
+                 "Ecosystem", size=7, color=GRAY_DK)
+    _add_textbox(slide, col_count_x, hdr_y, col_count_w, Inches(0.25),
+                 "Blocked", size=7, color=GRAY_DK)
+    _add_textbox(slide, col_pct_x,   hdr_y, col_pct_w,   Inches(0.25),
+                 "Share", size=7, color=GRAY_DK)
+    rule = slide.shapes.add_connector(1,
+        x + pad, hdr_y + Inches(0.27),
+        x + w - pad, hdr_y + Inches(0.27))
+    rule.line.color.rgb = RULE_GRAY
+    rule.line.width = Pt(0.4)
+
+    eco_color_map = {
+        "npm":    NPM_BLUE,
+        "maven":  PURPLE,
+        "go":     GREEN_PCT,
+        "nuget":  AMBER,
+        "docker": ORANGE,
+        "pypi":   PYPI_GREEN,
+    }
+
+    items = list(eco_counts.items())[:6]
+    total_blocked = sum(int(v) for _, v in items) or 1
+    max_v = max(int(v) for _, v in items) or 1
+
+    available_h = h - Inches(0.55) - pad
+    n = len(items)
+    row_h = Emu(int(available_h / max(n, 1)))
+    rr_y = hdr_y + Inches(0.32)
+
+    for eco, cnt in items:
+        eco_l = str(eco).lower()
+        clr = eco_color_map.get(eco_l, GRAY)
+        # Eco label
+        _add_textbox(slide, col_eco_x, rr_y, col_eco_w, row_h,
+                     str(eco), size=9, color=NEAR_BLK,
+                     anchor=MSO_ANCHOR.MIDDLE)
+        # Bar
+        bw = Emu(int(int(col_bar_w) * (int(cnt) / max_v)))
+        bar_h = Emu(int(int(row_h) * 0.45))
+        bar_y_mid = rr_y + Emu(int((int(row_h) - int(bar_h)) / 2))
+        if int(bw) > 0:
+            bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                          col_bar_x, bar_y_mid, bw, bar_h)
+            _set_fill(bar, clr); _no_line(bar)
+        # Count
+        _add_textbox(slide, col_count_x, rr_y, col_count_w, row_h,
+                     f"{int(cnt):,}", size=9, color=NEAR_BLK,
+                     anchor=MSO_ANCHOR.MIDDLE)
+        # Pct
+        pct = round(int(cnt) / total_blocked * 100)
+        _add_textbox(slide, col_pct_x, rr_y, col_pct_w, row_h,
+                     f"{pct}%", size=9, color=BLUE_DK, bold=True,
+                     anchor=MSO_ANCHOR.MIDDLE)
+        rr_y += row_h
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  SLIDE 8: SUMMARY                                                        ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 def _slide_summary(prs, customer_name, m, mal_count):
     s = _content_slide(prs, "Summary")
-    tf = _bullet_frame(s)
+
+    # ── Left column: bullet list ──────────────────────────────────────────
+    left_w = Inches(3.6)
+    tf = _bullet_frame(s, x=MARGIN_X, y=Inches(1.35),
+                       w=left_w, h=Inches(5.6))
     first = True
 
     if mal_count:
-        _bullet_paragraph(tf, "Investigate malicious usage", first=first)
+        _bullet_paragraph(tf, "Investigate malicious usage", first=first, size=13)
         first = False
 
-    _bullet_paragraph(tf, "", first=first, runs=[
-        {"text": "Call to Action - Curation Policies:", "bold": True},
+    _bullet_paragraph(tf, "", first=first, size=13, runs=[
+        {"text": "Call to Action - Curation Policies:", "bold": True, "size": 13},
     ])
     first = False
 
     if mal_count:
-        _bullet_paragraph(tf, "Blocking: Malicious", indent=1)
-    _bullet_paragraph(tf, "Blocking: Immature <2days", indent=1)
-    _bullet_paragraph(tf, "Dry-Run: CVE +9.0",          indent=1)
-    _bullet_paragraph(tf, "Dry-Run: End-of-Life",       indent=1)
+        _bullet_paragraph(tf, "Blocking: Malicious", indent=1, size=12)
+    _bullet_paragraph(tf, "Blocking: Immature <2days", indent=1, size=12)
+    _bullet_paragraph(tf, "Dry-Run: CVE +9.0",          indent=1, size=12)
+    _bullet_paragraph(tf, "Dry-Run: End-of-Life",       indent=1, size=12)
 
     if m.get("cat_eol", 0):
-        _bullet_paragraph(tf, "", runs=[
-            {"text": "Aged Packages:", "bold": True},
+        _bullet_paragraph(tf, "", size=13, runs=[
+            {"text": "Aged Packages:", "bold": True, "size": 13},
         ])
-        _bullet_paragraph(tf, "Upgrade where new version exists",        indent=1)
-        _bullet_paragraph(tf, "Replace where new version does not exist", indent=1)
+        _bullet_paragraph(tf, "Upgrade where new version exists",
+                          indent=1, size=12)
+        _bullet_paragraph(tf, "Replace where new version does not exist",
+                          indent=1, size=12)
+
+    # ── Right column: three charts ────────────────────────────────────────
+    right_x = MARGIN_X + left_w + Inches(0.25)
+    right_w = SLIDE_W - right_x - MARGIN_X
+
+    # 1. Risky packages by category — top row of 6 cards
+    cat_y = Inches(1.35)
+    cat_h = Inches(1.10)
+    _section_label(s, right_x, cat_y - Inches(0.27), right_w,
+                   "Risky downloaded OSS packages by category (priority order)")
+    _render_priority_cards(s, m, right_x, cat_y, right_w, cat_h)
+
+    # 2 + 3 side by side beneath
+    second_y = cat_y + cat_h + Inches(0.40)
+    second_h = Inches(3.40)
+    gap = Inches(0.20)
+    bva_w  = (right_w - gap) * 0.46
+    eco_w  = (right_w - gap) * 0.54
+
+    _section_label(s, right_x, second_y - Inches(0.27), bva_w,
+                   "Blocked vs approved")
+    _render_blocked_vs_approved(s, m, right_x, second_y, bva_w, second_h)
+
+    eco_x = right_x + bva_w + gap
+    _section_label(s, eco_x, second_y - Inches(0.27), eco_w,
+                   "Blocked URLs by ecosystem")
+    _render_ecosystem(s, m, eco_x, second_y, eco_w, second_h)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
