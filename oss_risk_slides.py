@@ -127,6 +127,12 @@ COMPROMISED_REGISTRY = {
     "litellm":         ("pypi", "CVE chain (RCE/SSRF, 2024–2026)","high"),
     "torchtriton":     ("pypi", "Dependency confusion (Dec 2022)","critical"),
     "colorama":        ("pypi", "Typosquat campaigns (ongoing)",  "low"),
+
+    # --- Watchlist: high-value families not yet compromised, monitored proactively ---
+    # Keys ending in "/*" match every sub-package under that scope (e.g. all @tanstack/*).
+    # Pre-populated so any future maintainer compromise auto-surfaces in the
+    # "Popular Targeted Packages" slide without code change.
+    "@tanstack/*":     ("npm", "TanStack family — high-value JS watchlist", "low"),
 }
 
 # Per-malicious-package metadata used by the "Findings - Malicious Package" slide.
@@ -586,6 +592,20 @@ def _slide_critical_cve(prs, m):
 # ║  SLIDE 7: FINDINGS — POPULAR TARGETED PACKAGES                           ║
 # ║  (Preserved from previous version — table grouped by attack family)      ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
+def _registry_lookup(name):
+    """Look up a package in COMPROMISED_REGISTRY, supporting exact match and
+    "<scope>/*" prefix patterns (e.g. "@tanstack/*" matches any @tanstack/<sub>)."""
+    # 1. Exact match wins
+    entry = COMPROMISED_REGISTRY.get(name)
+    if entry is not None:
+        return entry
+    # 2. Prefix patterns (keys ending in "/*")
+    for key, val in COMPROMISED_REGISTRY.items():
+        if key.endswith("/*") and name.startswith(key[:-1]):
+            return val
+    return None
+
+
 def _detect_compromised(m):
     findings = {}
     def _walk(records, kind):
@@ -593,7 +613,7 @@ def _detect_compromised(m):
             name = r.get("name") or r.get("Package Name") or r.get("package_name")
             if not name:
                 continue
-            entry = COMPROMISED_REGISTRY.get(name)
+            entry = _registry_lookup(name)
             if not entry:
                 continue
             eco, attack, sev = entry
