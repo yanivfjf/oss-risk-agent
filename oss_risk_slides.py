@@ -128,11 +128,21 @@ COMPROMISED_REGISTRY = {
     "torchtriton":     ("pypi", "Dependency confusion (Dec 2022)","critical"),
     "colorama":        ("pypi", "Typosquat campaigns (ongoing)",  "low"),
 
-    # --- Watchlist: high-value families not yet compromised, monitored proactively ---
-    # Keys ending in "/*" match every sub-package under that scope (e.g. all @tanstack/*).
-    # Pre-populated so any future maintainer compromise auto-surfaces in the
-    # "Popular Targeted Packages" slide without code change.
-    "@tanstack/*":     ("npm", "TanStack family — high-value JS watchlist", "low"),
+    # --- Mini Shai-Hulud wave 1 (11 May 2026) — TanStack family ---
+    # Confirmed compromise — 84 malicious npm artifacts across @tanstack scope,
+    # primary target @tanstack/react-router; payload router_init.js targeting
+    # CI credentials (GitHub Actions, AWS, HashiCorp Vault, Kubernetes).
+    "@tanstack/*":       ("npm", "Mini Shai-Hulud TanStack wave (11 May 2026)", "critical"),
+
+    # --- Mini Shai-Hulud wave 2 (19 May 2026) — AntV family + visualization libs ---
+    # 631 malicious versions across 314 packages; payload steals AWS / GCP /
+    # Azure / GitHub / npm / SSH / Kubernetes / Vault / Stripe credentials and
+    # attempts Docker container escape via the host socket.
+    "@antv/*":           ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
+    "echarts-for-react": ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
+    "timeago.js":        ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
+    "size-sensor":       ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
+    "canvas-nest.js":    ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
 }
 
 # Per-malicious-package metadata used by the "Findings - Malicious Package" slide.
