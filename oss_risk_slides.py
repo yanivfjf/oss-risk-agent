@@ -128,21 +128,55 @@ COMPROMISED_REGISTRY = {
     "torchtriton":     ("pypi", "Dependency confusion (Dec 2022)","critical"),
     "colorama":        ("pypi", "Typosquat campaigns (ongoing)",  "low"),
 
-    # --- Mini Shai-Hulud wave 1 (11 May 2026) — TanStack family ---
-    # Confirmed compromise — 84 malicious npm artifacts across @tanstack scope,
-    # primary target @tanstack/react-router; payload router_init.js targeting
-    # CI credentials (GitHub Actions, AWS, HashiCorp Vault, Kubernetes).
-    "@tanstack/*":       ("npm", "Mini Shai-Hulud TanStack wave (11 May 2026)", "critical"),
+    # --- Shai-Hulud: Here We Go Again (12 May 2026) — TeamPCP, 170+ npm packages + 2 PyPI ---
+    # JFrog Research: https://research.jfrog.com/post/shai-hulud-here-we-go-again/
+    # Payload: malicious preinstall loader + large obfuscated JS bundle targeting
+    # CI/CD and developer environments. Worm-like self-propagation via npm token
+    # republishing. Harvests GitHub OIDC, AWS/GCP/Azure/Kubernetes/Vault creds,
+    # password-manager unlocks, local dev-tool tokens. Dead-man switch executes
+    # destructive rm -rf on detected token revocation (geofenced behavior).
+    # C2: 83.142.209.194 + filev2.getsession.org. Notable scoped namespaces:
+    #   @tanstack/*  (primary — 60+ packages incl. react-router, start, plugin)
+    #   @uipath/*    (80+ packages — tooling and SDKs)
+    #   @squawk/*    (aviation data packages)
+    #   @mistralai/* (npm AI client libraries)
+    #   @tallyui/*   (UI component packages)
+    "@tanstack/*":       ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "@uipath/*":         ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "@squawk/*":         ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "@mistralai/*":      ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "@tallyui/*":        ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "git-branch-selector":("npm","Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "cross-stitch":      ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "ts-dna":            ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "safe-action":       ("npm", "Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    # PyPI partners in the same campaign
+    "mistralai":         ("pypi","Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
+    "guardrails-ai":     ("pypi","Shai-Hulud: Here We Go Again (12 May 2026)", "critical"),
 
-    # --- Mini Shai-Hulud wave 2 (19 May 2026) — AntV family + visualization libs ---
-    # 631 malicious versions across 314 packages; payload steals AWS / GCP /
-    # Azure / GitHub / npm / SSH / Kubernetes / Vault / Stripe credentials and
-    # attempts Docker container escape via the host socket.
-    "@antv/*":           ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
-    "echarts-for-react": ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
-    "timeago.js":        ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
-    "size-sensor":       ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
-    "canvas-nest.js":    ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
+    # --- Shai-Hulud: Here We Go Again — May 19 wave (19 May 2026) ---
+    # JFrog Research: https://research.jfrog.com/post/shai-hulud-here-we-go-again-may19/
+    # Compromised maintainer accounts: atool (i@hust.cc) and prop.
+    # 325 legitimate npm packages targeted (primary @antv/* — 323+ packages)
+    # plus PyPI durabletask. Payload uses preinstall lifecycle hooks triggering
+    # obfuscated Bun bundles; PyPI variant pulls rope.pyz at import time.
+    # Capabilities: GH-Actions runner memory extraction (bypasses log masking),
+    # AWS SSM lateral movement, kubectl-exec pod propagation, password-manager
+    # unlock attempts. C2: t.m-kosche.com, check.git-service.com.
+    "@antv/*":              ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "@lint-md/*":           ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "@openclaw-cn/*":       ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "@cap-js/openapi":      ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "@starmind/collector-cli":("npm","Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "canvas-nest.js":       ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "echarts-for-react":    ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "timeago.js":           ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "size-sensor":          ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "jest-canvas-mock":     ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "lint-md":              ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    "mcp-echarts":          ("npm", "Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
+    # PyPI partner in the same campaign
+    "durabletask":          ("pypi","Shai-Hulud: Here We Go Again — May 19 wave", "critical"),
 
     # --- Shai-Hulud Miasma (1 June 2026) — Red Hat cloud-services namespace ---
     # 28 npm packages / 96 malicious versions hijacked under the
