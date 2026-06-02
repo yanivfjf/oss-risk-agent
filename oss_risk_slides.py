@@ -143,6 +143,15 @@ COMPROMISED_REGISTRY = {
     "timeago.js":        ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
     "size-sensor":       ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
     "canvas-nest.js":    ("npm", "Mini Shai-Hulud AntV wave (19 May 2026)", "critical"),
+
+    # --- Shai-Hulud Miasma (1 June 2026) — Red Hat cloud-services namespace ---
+    # 28 npm packages / 96 malicious versions hijacked under the
+    # @redhat-cloud-services scope. Payload steals AWS/Azure/GCP/Kubernetes/Vault
+    # credentials, GitHub + npm tokens, installs persistence (kitty-monitor
+    # systemd unit / LaunchAgent), and exfiltrates disguised as Anthropic API
+    # traffic. Self-propagates via npm token re-publishing. Ref:
+    # https://research.jfrog.com/post/shai-hulud-miasma-redhat-cloud-services/
+    "@redhat-cloud-services/*": ("npm", "Shai-Hulud Miasma (1 Jun 2026)", "critical"),
 }
 
 # Per-malicious-package metadata used by the "Findings - Malicious Package" slide.
